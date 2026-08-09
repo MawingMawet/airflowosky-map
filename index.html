@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AirflowOSky - Bangkok airspace heatmap</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  html, body { height: 100%; margin: 0; font-family: system-ui, sans-serif; }
+  #map { height: 100%; }
+  .panel {
+    position: absolute; top: 12px; right: 12px; z-index: 1000;
+    background: rgba(255, 255, 255, 0.95); border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25); padding: 12px 14px;
+    width: 250px;
+  }
+  .panel h1 { font-size: 15px; margin: 0 0 8px; }
+  .panel label { display: block; font-size: 12px; color: #444; margin-top: 6px; }
+  .panel select { width: 100%; margin-top: 2px; font-size: 12px; }
+  .panel .stats { font-size: 12px; color: #333; margin-top: 10px; }
+  .panel .meta { font-size: 10px; color: #888; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div class="panel">
+  <h1>Bangkok airspace heatmap</h1>
+  <label>From (UTC hour)
+    <select id="from"></select>
+  </label>
+  <label>To (UTC hour)
+    <select id="to"></select>
+  </label>
+  <div class="stats" id="stats"></div>
+  <div class="meta" id="meta"></div>
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+<!-- Data ships as a script constant so the page works from file:// and S3.
+     Server-side later: replace this include with a fetch of the same shape. -->
+<script src="heatmap_data.js"></script>
+<script>
+  const map = L.map("map").setView([13.75, 100.65], 9);
+  L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
+    attribution: "&copy; OpenStreetMap contributors &copy; CARTO",
+    subdomains: "abcd",
+    maxZoom: 19,
+  }).addTo(map);
+
+  for (const [name, [lat, lon]] of Object.entries(HEATMAP_DATA.airports)) {
+    L.marker([lat, lon]).addTo(map).bindTooltip(name);
+  }
+
+  const fromSel = document.getElementById("from");
+  const toSel = document.getElementById("to");
+  HEATMAP_DATA.hours.forEach((hour, i) => {
+    fromSel.add(new Option(hour, i));
+    toSel.add(new Option(hour, i));
+  });
+  fromSel.value = 0;
+  toSel.value = HEATMAP_DATA.hours.length - 1;
+
+  let heatLayer = null;
+
+  function render() {
+    let lo = Number(fromSel.value);
+    let hi = Number(toSel.value);
+    if (lo > hi) [lo, hi] = [hi, lo];
+    const byCell = new Map();
+    let obsTotal = 0;
+    for (const [lat, lon, hourIdx, obs] of HEATMAP_DATA.cells) {
+      if (hourIdx < lo || hourIdx > hi) continue;
+      const key = lat + "," + lon;
+      byCell.set(key, (byCell.get(key) || 0) + obs);
+      obsTotal += obs;
+    }
+    let max = 0;
+    for (const value of byCell.values()) if (value > max) max = value;
+    const points = [];
+    for (const [key, value] of byCell) {
+      const [lat, lon] = key.split(",").map(Number);
+      points.push([lat, lon, value / max]);
+    }
+    if (heatLayer) map.removeLayer(heatLayer);
+    heatLayer = L.heatLayer(points, {
+      radius: 8, blur: 6, minOpacity: 0.3,
+    }).addTo(map);
+    document.getElementById("stats").textContent =
+      (hi - lo + 1) + " hour(s), " + byCell.size + " cells, " +
+      obsTotal + " observations";
+  }
+
+  fromSel.addEventListener("change", render);
+  toSel.addEventListener("change", render);
+  document.getElementById("meta").textContent =
+    "Generated " + HEATMAP_DATA.generated_at +
+    " | data: OpenSky Network | hours are UTC (Bangkok is UTC+7)";
+  render();
+</script>
+</body>
+</html>
